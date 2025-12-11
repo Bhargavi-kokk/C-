@@ -1,0 +1,23 @@
+#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+	// your code goes here
+int t;
+cin>>t;
+while(t--)
+{
+    int n,x;
+    cin>>n>>x;
+    int q=(n*x)/4;
+    if((n*x)%4==0)
+    {
+        cout<<q<<endl;
+    }
+    else
+    {
+        cout<<q+1<<endl;
+    }
+}
+return 0;
+}
