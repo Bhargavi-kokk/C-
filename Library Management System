@@ -1,0 +1,573 @@
+package com.example.demo;
+import jakarta.persistence.*;
+@Entity
+@Table(name = "books")
+public class Book {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private String title;
+    private String author;
+    private String isbn;
+    private String category;
+    
+    @Column(name = "availability_status")
+    private String availabilityStatus = "Available";
+    // Standard Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
+    public String getAuthor() { return author; }
+    public void setAuthor(String author) { this.author = author; }
+    public String getIsbn() { return isbn; }
+    public void setIsbn(String isbn) { this.isbn = isbn; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+    public String getAvailabilityStatus() { return availabilityStatus; }
+    public void setAvailabilityStatus(String availabilityStatus) { this.availabilityStatus = availabilityStatus; }
+}
+//BookController
+package com.example.demo;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpSession;
+import java.time.LocalDate;
+import java.util.*;
+import java.util.stream.Collectors;
+import org.springframework.web.bind.annotation.ResponseBody;
+
+
+@Controller
+public class BookController {
+    @Autowired
+    private BookService bookService;
+    
+    @Autowired
+    private BookIssueService bookIssueService;
+    
+    // Home Page
+    @GetMapping("/")
+    public String home() {
+        return "index";
+    }
+    
+    // Login Page
+    @GetMapping("/login")
+    public String login() {
+        return "login";
+    }
+    
+    // Librarian Dashboard - Full CRUD + Issue Management
+    @GetMapping("/librarian/dashboard")
+    public String librarianDashboard(Model model) {
+        model.addAttribute("books", bookService.getAllBooks());
+        model.addAttribute("availableCount", bookService.getAvailableBooksCount());
+        model.addAttribute("issuedCount", bookIssueService.getIssuedCount());
+        model.addAttribute("overdueCount", bookIssueService.getOverdueCount());
+        model.addAttribute("role", "Librarian");
+        return "librarian-dashboard";
+    }
+    
+    // Member Dashboard - View Only + Reserve
+@GetMapping("/member/dashboard")
+    public String memberDashboard(Model model, HttpSession session) {
+        String memberEmail = (String) session.getAttribute("currentUserEmail");
+        if (memberEmail == null) {
+            return "redirect:/login?error=noSession";
+        }
+        
+        Map<String, Object> memberStats = bookIssueService.getMemberStats(memberEmail);
+        List<BookIssue> dueSoonAlerts = bookIssueService.getDueSoonAlerts(memberEmail);
+        List<Book> recommendations = bookIssueService.getRecommendations(memberEmail);
+        List<Book> books = bookService.getAllBooks();
+        
+        model.addAttribute("memberEmail", memberEmail);
+        model.addAttribute("memberStats", memberStats);
+        model.addAttribute("dueSoonAlerts", dueSoonAlerts);
+        model.addAttribute("recommendations", recommendations);
+        model.addAttribute("books", books);
+        model.addAttribute("role", "Member");
+        return "member-dashboard";
+    }
+    
+    @GetMapping("/api/member/books/filter")
+    @ResponseBody
+    public List<Book> filterBooks(
+            @RequestParam(defaultValue = "all") String availability,
+            @RequestParam(defaultValue = "all") String category,
+            HttpSession session) {
+        String memberEmail = (String) session.getAttribute("currentUserEmail");
+        if (memberEmail == null) {
+            return java.util.Collections.emptyList();
+        }
+        
+        java.util.List<Book> filteredBooks = bookService.getAllBooks();
+        
+        if (!"all".equals(availability)) {
+            filteredBooks = filteredBooks.stream()
+                .filter(b -> b.getAvailabilityStatus().equalsIgnoreCase(availability))
+                .collect(java.util.stream.Collectors.toList());
+        }
+        
+        if (!"all".equals(category)) {
+            filteredBooks = filteredBooks.stream()
+                .filter(b -> b.getCategory().equalsIgnoreCase(category))
+                .collect(java.util.stream.Collectors.toList());
+        }
+        
+        return filteredBooks;
+    }
+    
+    // ==================== BOOK CRUD ====================
+
+    
+    // Add Book Form (Librarian only)
+    @GetMapping("/librarian/add")
+    public String addBookForm(Model model) {
+        model.addAttribute("book", new Book());
+        return "add-book";
+    }
+    
+    // Save Book (Librarian only)
+    @PostMapping("/librarian/saveBook")
+    public String saveBook(@ModelAttribute Book book) {
+        book.setAvailabilityStatus("Available");
+        bookService.saveBook(book);
+        return "redirect:/librarian/dashboard";
+    }
+    
+    // Edit Book Form (Librarian only)
+    @GetMapping("/librarian/edit/{id}")
+    public String editBookForm(@PathVariable Long id, Model model) {
+        Book book = bookService.getBookById(id);
+        model.addAttribute("book", book);
+        return "edit-book";
+    }
+    
+    // Update Book (Librarian only)
+    @PostMapping("/librarian/updateBook")
+    public String updateBook(@ModelAttribute Book book) {
+        bookService.updateBook(book);
+        return "redirect:/librarian/dashboard";
+    }
+    
+    // Delete Book (Librarian only)
+    @GetMapping("/librarian/delete/{id}")
+    public String deleteBook(@PathVariable Long id) {
+        bookService.deleteBook(id);
+        return "redirect:/librarian/dashboard";
+    }
+    
+    // ==================== BOOK ISSUE/RETURN ====================
+    
+    // Issue Book Form
+    @GetMapping("/librarian/issue/{id}")
+    public String issueBookForm(@PathVariable Long id, Model model) {
+        Book book = bookService.getBookById(id);
+        model.addAttribute("book", book);
+        return "issue-book";
+    }
+    
+    // Issue Book - Process
+    @PostMapping("/librarian/issueBook")
+    public String issueBook(@RequestParam Long bookId, 
+                           @RequestParam String memberName,
+                           @RequestParam String memberEmail) {
+        BookIssue issue = bookIssueService.issueBook(bookId, memberName, memberEmail);
+        if (issue != null) {
+            return "redirect:/librarian/dashboard?success=issued";
+        }
+        return "redirect:/librarian/dashboard?error=alreadyIssued";
+    }
+    
+    // Return Book
+    @GetMapping("/librarian/return/{id}")
+    public String returnBook(@PathVariable Long id, Model model) {
+        BookIssue issue = bookIssueService.returnBook(id);
+        model.addAttribute("issue", issue);
+        return "return-confirmation";
+    }
+    
+    // View All Issued Books
+    @GetMapping("/librarian/issued-books")
+    public String viewIssuedBooks(Model model) {
+        model.addAttribute("issues", bookIssueService.getActiveIssues());
+        return "issued-books";
+    }
+    
+    // View Overdue Books
+    @GetMapping("/librarian/overdue-books")
+    public String viewOverdueBooks(Model model) {
+        model.addAttribute("issues", bookIssueService.getOverdueIssues());
+        return "overdue-books";
+    }
+    
+    // Librarian Members Page
+    @GetMapping("/librarian/members")
+    public String viewMembers(Model model) {
+        model.addAttribute("issues", bookIssueService.getAllIssues());
+        return "members";
+    }
+    
+    // Member Reservations
+@PostMapping("/member/reserveBook")
+    public String reserveBook(@RequestParam Long bookId, @RequestParam String memberName, @RequestParam String memberEmail, HttpSession session) {
+        String sessionEmail = (String) session.getAttribute("currentUserEmail");
+        if (!memberEmail.equals(sessionEmail)) {
+            return "redirect:/member/dashboard?error=invalidEmail";
+        }
+        
+        BookIssue reservation = bookIssueService.reserveBook(bookId, memberName, memberEmail);
+        if (reservation != null) {
+            return "redirect:/member/dashboard?success=reserved-" + bookId;
+        }
+        return "redirect:/member/dashboard?error=bookUnavailable";
+
+    }
+
+    @GetMapping("/member/my-reservations")
+    public String myReservations(Model model, HttpSession session) {
+        String userEmail = (String) session.getAttribute("currentUserEmail");
+        if (userEmail == null) {
+            return "redirect:/member/dashboard?error=noSession";
+        }
+        model.addAttribute("issues", bookIssueService.getIssuesByMember(userEmail));
+        return "my-reservations";
+    }
+}
+
+
+//BookIssue
+package com.example.demo;
+
+import jakarta.persistence.*;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+
+@Entity
+@Table(name = "book_issues")
+public class BookIssue {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(name = "book_id")
+    private Long bookId;
+    
+    @Column(name = "member_name")
+    private String memberName;
+    
+    @Column(name = "member_email")
+    private String memberEmail;
+    
+    @Column(name = "book_title")
+    private String bookTitle;
+    
+    @Column(name = "issue_date")
+    private LocalDate issueDate;
+    
+    @Column(name = "due_date")
+    private LocalDate dueDate;
+    
+    @Column(name = "return_date")
+    private LocalDate returnDate;
+    
+    @Column(name = "status")
+    private String status; // ISSUED, RETURNED, OVERDUE
+    
+    @Column(name = "fine_amount")
+    private Double fineAmount;
+    
+    // Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public Long getBookId() { return bookId; }
+    public void setBookId(Long bookId) { this.bookId = bookId; }
+    
+    public String getMemberName() { return memberName; }
+    public void setMemberName(String memberName) { this.memberName = memberName; }
+    
+    public String getMemberEmail() { return memberEmail; }
+    public void setMemberEmail(String memberEmail) { this.memberEmail = memberEmail; }
+    
+    public String getBookTitle() { return bookTitle; }
+    public void setBookTitle(String bookTitle) { this.bookTitle = bookTitle; }
+    
+    public LocalDate getIssueDate() { return issueDate; }
+    public void setIssueDate(LocalDate issueDate) { this.issueDate = issueDate; }
+    
+    public LocalDate getDueDate() { return dueDate; }
+    public void setDueDate(LocalDate dueDate) { this.dueDate = dueDate; }
+    
+    public LocalDate getReturnDate() { return returnDate; }
+    public void setReturnDate(LocalDate returnDate) { this.returnDate = returnDate; }
+    
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
+    
+    public Double getFineAmount() { return fineAmount; }
+    public void setFineAmount(Double fineAmount) { this.fineAmount = fineAmount; }
+    
+    // Helper method to calculate overdue days
+    public long getOverdueDays() {
+        if (returnDate == null) {
+            LocalDate today = LocalDate.now();
+            if (today.isAfter(dueDate)) {
+                return ChronoUnit.DAYS.between(dueDate, today);
+            }
+        }
+        return 0;
+    }
+    
+    // Helper method to calculate fine (10 per day overdue)
+    public double calculateFine() {
+        long overdueDays = getOverdueDays();
+        return overdueDays * 10.0; // 10 per day
+    }
+    
+    // Check if overdue
+    public boolean isOverdue() {
+        if (returnDate == null) {
+            return LocalDate.now().isAfter(dueDate);
+        }
+        return false;
+    }
+}
+//BookRepository
+package com.example.demo;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+
+public interface BookIssueRepository extends JpaRepository<BookIssue, Long> {
+    List<BookIssue> findAll();
+    List<BookIssue> findByStatus(String status);
+    List<BookIssue> findByMemberEmail(String memberEmail);
+    List<BookIssue> findByBookIdAndStatus(Long bookId, String status);
+    
+    long countByMemberEmailAndStatusIn(String memberEmail, List<String> statuses);
+    
+    @Query("SELECT i FROM BookIssue i WHERE i.memberEmail = :email AND i.status IN :statuses ORDER BY i.issueDate DESC")
+    List<BookIssue> findRecentByMemberEmailAndStatus(String email, List<String> statuses);
+    
+    @Query(value = "SELECT SUM(fi.fine_amount) FROM book_issues fi WHERE fi.member_email = :email AND fi.fine_amount > 0 AND (fi.status = 'OVERDUE' OR fi.status = 'ISSUED')", nativeQuery = true)
+    Double sumPendingFinesByMemberEmail(String email);
+    
+    @Query(value = "SELECT * FROM book_issues WHERE member_email = :email AND status = 'ISSUED' AND due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 48 HOUR) ORDER BY due_date ASC", nativeQuery = true)
+    List<BookIssue> findDueSoonByMemberEmail(String email);
+
+}
+//BookIssueService
+package com.example.demo;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+@Service
+public class BookIssueService {
+    
+    @Autowired
+    private BookIssueRepository bookIssueRepository;
+    
+    @Autowired
+    private BookRepository bookRepository;
+    
+    public boolean hasActiveIssueForBook(Long bookId) {
+        return !bookIssueRepository.findByBookIdAndStatus(bookId, "ISSUED").isEmpty();
+    }
+    
+    // Issue a book to a member (Librarian full issue)
+    public BookIssue issueBook(Long bookId, String memberName, String memberEmail) {
+        Book book = bookRepository.findById(bookId).orElse(null);
+        if (book == null) return null;
+        
+        // Check if book already has active issue or reserve
+        if (hasActiveIssueOrReserve(bookId)) {
+            return null;
+        }
+        
+        BookIssue issue = new BookIssue();
+        issue.setBookId(bookId);
+        issue.setBookTitle(book.getTitle());
+        issue.setMemberName(memberName);
+        issue.setMemberEmail(memberEmail);
+        issue.setIssueDate(LocalDate.now());
+        issue.setDueDate(LocalDate.now().plusDays(14));
+        issue.setStatus("ISSUED");
+        issue.setFineAmount(0.0);
+        
+        // Update book availability
+        book.setAvailabilityStatus("Issued");
+        bookRepository.save(book);
+        
+        return bookIssueRepository.save(issue);
+    }
+    
+    // Reserve book for member (doesn't change availability)
+    public BookIssue reserveBook(Long bookId, String memberName, String memberEmail) {
+        Book book = bookRepository.findById(bookId).orElse(null);
+        if (book == null) return null;
+        
+        // Check if already reserved/issued by anyone
+        if (hasActiveIssueOrReserve(bookId)) {
+            return null;
+        }
+        
+        BookIssue reserve = new BookIssue();
+        reserve.setBookId(bookId);
+        reserve.setBookTitle(book.getTitle());
+        reserve.setMemberName(memberName);
+        reserve.setMemberEmail(memberEmail);
+        reserve.setIssueDate(LocalDate.now());
+        reserve.setDueDate(LocalDate.now().plusDays(2));  // 2 days to pickup
+        reserve.setStatus("RESERVED");
+        reserve.setFineAmount(0.0);
+        
+        // Book stays Available for librarian to issue
+        bookIssueRepository.save(reserve);
+        return reserve;
+    }
+    
+    // Check if book has active issue or reserve by anyone
+    private boolean hasActiveIssueOrReserve(Long bookId) {
+        List<BookIssue> active = bookIssueRepository.findByBookIdAndStatus(bookId, "ISSUED");
+        active.addAll(bookIssueRepository.findByBookIdAndStatus(bookId, "RESERVED"));
+        return !active.isEmpty();
+    }
+    
+    // Return a book and calculate fine
+    public BookIssue returnBook(Long issueId) {
+        BookIssue issue = bookIssueRepository.findById(issueId).orElse(null);
+        if (issue == null) return null;
+        
+        LocalDate returnDate = LocalDate.now();
+        issue.setReturnDate(returnDate);
+        
+        long overdueDays = ChronoUnit.DAYS.between(issue.getDueDate(), returnDate);
+        if (overdueDays > 0) {
+            issue.setStatus("OVERDUE");
+            issue.setFineAmount(overdueDays * 10.0);
+        } else {
+            issue.setStatus("RETURNED");
+            issue.setFineAmount(0.0);
+        }
+        
+        // Update book availability
+        Book book = bookRepository.findById(issue.getBookId()).orElse(null);
+        if (book != null) {
+            book.setAvailabilityStatus("Available");
+            bookRepository.save(book);
+        }
+        
+        return bookIssueRepository.save(issue);
+    }
+    
+    // Get all book issues
+    public List<BookIssue> getAllIssues() {
+        return bookIssueRepository.findAll();
+    }
+    
+    // Get active issues
+    public List<BookIssue> getActiveIssues() {
+        List<BookIssue> all = bookIssueRepository.findAll();
+        return all.stream()
+                .filter(i -> "ISSUED".equals(i.getStatus()))
+                .collect(Collectors.toList());
+    }
+    
+    // Get overdue issues
+    public List<BookIssue> getOverdueIssues() {
+        List<BookIssue> all = bookIssueRepository.findAll();
+        return all.stream()
+                .filter(BookIssue::isOverdue)
+                .collect(Collectors.toList());
+    }
+    
+    // Counts
+    public long getIssuedCount() {
+        return getActiveIssues().size();
+    }
+    
+    public long getOverdueCount() {
+        return getOverdueIssues().size();
+    }
+    
+    // Get issues by member
+    public List<BookIssue> getIssuesByMember(String memberEmail) {
+        return bookIssueRepository.findByMemberEmail(memberEmail);
+    }
+    
+    public BookIssue getIssueById(Long id) {
+        return bookIssueRepository.findById(id).orElse(null);
+    }
+    
+    // Total fine for member
+    public double getTotalFineByMember(String memberEmail) {
+        List<BookIssue> issues = getIssuesByMember(memberEmail);
+        double totalFine = 0.0;
+        for (BookIssue issue : issues) {
+            if (issue.getFineAmount() != null) {
+                totalFine += issue.getFineAmount();
+            }
+        }
+        return totalFine;
+    }
+
+    public Map<String, Object> getMemberStats(String memberEmail) {
+        List<String> borrowStatuses = Arrays.asList("ISSUED", "RETURNED");
+        long totalBorrowed = bookIssueRepository.countByMemberEmailAndStatusIn(memberEmail, borrowStatuses);
+        long activeReservations = bookIssueRepository.countByMemberEmailAndStatusIn(memberEmail, Arrays.asList("RESERVED"));
+        Double pendingFinesObj = bookIssueRepository.sumPendingFinesByMemberEmail(memberEmail);
+        double pendingFines = pendingFinesObj != null ? pendingFinesObj : 0.0;
+        
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("totalBorrowed", totalBorrowed);
+        stats.put("activeReservations", activeReservations);
+        stats.put("pendingFines", pendingFines);
+        return stats;
+    }
+    
+    public List<BookIssue> getDueSoonAlerts(String memberEmail) {
+        return bookIssueRepository.findDueSoonByMemberEmail(memberEmail);
+    }
+    
+    public List<Book> getRecommendations(String memberEmail) {
+        List<BookIssue> recentIssues = bookIssueRepository.findRecentByMemberEmailAndStatus(memberEmail, Arrays.asList("ISSUED", "RETURNED"));
+        if (recentIssues.isEmpty()) {
+            // Fallback to top 3 available books
+            List<Book> available = bookRepository.findByAvailabilityStatus("Available");
+            return available.stream().limit(3).collect(Collectors.toList());
+        }
+        
+        Long lastBookId = recentIssues.get(0).getBookId();
+        Optional<Book> lastBookOpt = bookRepository.findById(lastBookId);
+        if (lastBookOpt.isEmpty()) {
+            List<Book> available = bookRepository.findByAvailabilityStatus("Available");
+            return available.stream().limit(3).collect(Collectors.toList());
+        }
+        
+        String lastCategory = lastBookOpt.get().getCategory();
+        List<Book> recs = bookRepository.findByCategoryAndAvailabilityStatusOrderByIdDesc(lastCategory, "Available");
+        if (recs.isEmpty()) {
+            List<Book> available = bookRepository.findByAvailabilityStatus("Available");
+            return available.stream().limit(3).collect(Collectors.toList());
+        }
+        return recs.stream().limit(3).collect(Collectors.toList());
+    }
+}
+
